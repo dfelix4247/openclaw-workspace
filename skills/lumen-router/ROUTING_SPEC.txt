@@ -1,0 +1,296 @@
+LUMEN-ROUTER V1 ROUTING SPEC
+
+Purpose
+This document defines how the router should map natural-language user requests to valid lumen-scout CLI commands. The goal is deterministic command selection, not open-ended tool improvisation.
+
+Scope
+This spec covers lumen-scout only.
+It does not cover buyer-scout, BBB-only authenticated search, or any other future tool.
+
+Design Principles
+1. The router must emit only commands that exist in lumen-scout today.
+2. The router must never invent flags or arguments.
+3. The router must choose one intent bucket, then emit one command template for that bucket.
+4. If required information is missing, the router should request the minimum clarification needed or return a structured “needs_clarification” outcome.
+5. If the request is outside lumen-scout’s current scope, the router should return “not_implemented” rather than forcing a bad command.
+6. Generic search should prefer discover-web unless the user clearly indicates private K-12 school discovery.
+
+Supported Commands
+1. lumen-scout discover
+2. lumen-scout discover-web
+3. lumen-scout enrich
+4. lumen-scout draft
+5. lumen-scout followup
+6. lumen-scout brief
+7. lumen-scout capabilities
+
+Intent Buckets
+
+1. generic_discovery
+Definition
+Use when the user wants a general free-text search or discovery query that is not explicitly limited to private K-12 school discovery.
+
+Typical user language
+- search real estate investing in Downey
+- find tutoring centers in Glendale
+- look up after-school programs near Pasadena
+- research lenders for school expansion in Los Angeles
+- search private education consultants in California
+
+Command template
+.\run.ps1 lumen-scout discover-web "<raw user query>" --max 5
+
+Required fields
+- query
+
+Optional derived fields
+- max, if the user explicitly requests a number of results
+- location, only if router logic later supports extracting it safely without changing meaning
+
+Routing notes
+- Preserve the user’s query text as closely as possible.
+- Do not force city parsing if the free-text query already contains the location.
+- Do not route to school discovery unless the request is explicitly about private K-12 schools.
+
+Fallback behavior
+- If the user query is empty or meaningless, return needs_clarification.
+
+
+2. school_discovery
+Definition
+Use when the user is explicitly asking to find private K-12 schools in a city or region.
+
+Typical user language
+- find private schools in Downey
+- discover K-12 schools in Glendale
+- search for private schools in Pasadena CA
+- find independent schools in Orange County
+- show me private K-12 schools near Whittier
+
+Command template
+.\run.ps1 lumen-scout discover --city "<city_or_region>" --max 25
+
+Required fields
+- city_or_region
+
+Optional derived fields
+- max, if the user explicitly asks for a smaller or larger count
+
+Routing notes
+- Only use this bucket when school-specific language is present.
+- Strong indicators include: private school, K-12 school, independent school, school leads, schools in <location>.
+- If the user only says “find leads in Downey,” do not assume schools. Prefer generic_discovery unless the broader conversation clearly establishes school context.
+
+Fallback behavior
+- If no city or region is provided, return needs_clarification.
+
+
+3. school_enrichment
+Definition
+Use when the user wants to enrich already-discovered school leads using website data or personalization hooks.
+
+Typical user language
+- enrich the school leads
+- scrape the school websites and add personalization hooks
+- run enrichment on the leads
+- enrich all discovered schools
+
+Command template
+.\run.ps1 lumen-scout enrich
+
+Required fields
+- none for the default command surface
+
+Optional derived fields
+- input path, only if later exposed clearly in router policy
+- dry-run, only if user explicitly requests it and command support is stable
+
+Routing notes
+- This bucket assumes the user already has school leads available.
+- Do not use this for generic web search results.
+
+Fallback behavior
+- If the conversation does not establish existing school leads, return needs_clarification.
+
+
+4. outreach_draft
+Definition
+Use when the user wants initial outreach drafts generated for school leads.
+
+Typical user language
+- draft outreach emails
+- generate outreach drafts for the school leads
+- create first-pass outreach for the leads
+- make markdown drafts for school outreach
+
+Command template
+.\run.ps1 lumen-scout draft
+
+Required fields
+- none for the default command surface
+
+Optional derived fields
+- limit, if the user explicitly requests a number of drafts
+- dry-run, if user explicitly requests it and support is stable
+
+Routing notes
+- This bucket is for initial outreach only.
+- If the user asks for follow-ups, use followup_draft instead.
+
+Fallback behavior
+- If there are no known school leads in context, return needs_clarification.
+
+
+5. followup_draft
+Definition
+Use when the user wants follow-up outreach drafts for school leads.
+
+Typical user language
+- generate follow-up drafts
+- write follow-ups for the leads
+- create second-touch outreach
+- make a follow-up email for the school prospects
+
+Command template
+.\run.ps1 lumen-scout followup
+
+Required fields
+- none for the default command surface
+
+Optional derived fields
+- days, if the user explicitly provides follow-up timing and the router has a stable template for it
+
+Routing notes
+- This is distinct from initial outreach drafting.
+- Do not use draft when the request clearly says follow-up.
+
+Fallback behavior
+- If there are no known school leads in context, return needs_clarification.
+
+
+6. call_brief
+Definition
+Use when the user wants a call brief for one specific school lead.
+
+Typical user language
+- make a call brief for lead abc123
+- create a brief for this school lead
+- generate a call prep brief for lead xyz789
+
+Command template
+.\run.ps1 lumen-scout brief --lead-id "<lead_id>"
+
+Required fields
+- lead_id
+
+Routing notes
+- The router should not guess lead_id values.
+- If the user refers to “this lead” but no machine-usable lead_id exists in context, request clarification.
+
+Fallback behavior
+- If lead_id is missing, return needs_clarification.
+
+
+7. capabilities_lookup
+Definition
+Use when the user asks what lumen-scout can do, what commands exist, or how to use it.
+
+Typical user language
+- what can lumen-scout do
+- show me the capabilities
+- what commands are supported
+- how do I use lumen-scout
+
+Command template
+.\run.ps1 lumen-scout capabilities
+
+Required fields
+- none
+
+Routing notes
+- Prefer this bucket instead of generating a prose-only reply if the goal is to surface the actual CLI capabilities.
+
+Fallback behavior
+- none
+
+
+Unsupported / Not Implemented Cases
+The router must return not_implemented for the following categories instead of forcing a lumen-scout command:
+- authenticated-source searches
+- BBB-specific search or scraping
+- generic login-required data extraction
+- buyer-scout workflows
+- arbitrary web actions beyond lumen-scout’s command surface
+- non-school outreach workflows that do not fit discover-web
+
+
+Disambiguation Rules
+1. If the request explicitly references private schools, K-12 schools, independent schools, or school leads, prefer school_discovery or a school workflow bucket.
+2. If the request is a general search with no explicit school language, prefer generic_discovery.
+3. If the request is about drafting first contact, use outreach_draft.
+4. If the request is about second-touch or follow-up messaging, use followup_draft.
+5. If the request asks what the tool can do, use capabilities_lookup.
+6. If the request requires a lead_id and none is present, do not guess. Return needs_clarification.
+
+
+Default Parameters
+Unless the user explicitly overrides them, use:
+- discover-web: --max 5
+- discover: --max 25
+- enrich: no additional flags
+- draft: no additional flags
+- followup: no additional flags
+- brief: requires --lead-id
+- capabilities: no additional flags
+
+
+Structured Router Outcomes
+The router should internally produce one of these outcomes before execution:
+1. execute_command
+   - includes: intent_bucket, command_string
+2. needs_clarification
+   - includes: intent_bucket, missing_field, clarification_question
+3. not_implemented
+   - includes: reason, user_request_category
+
+
+Examples
+Example 1
+User: search real estate investing in Downey
+Outcome: execute_command
+Intent: generic_discovery
+Command: .\run.ps1 lumen-scout discover-web "search real estate investing in Downey" --max 5
+
+Example 2
+User: find private schools in Downey
+Outcome: execute_command
+Intent: school_discovery
+Command: .\run.ps1 lumen-scout discover --city "Downey" --max 25
+
+Example 3
+User: enrich the school leads
+Outcome: needs_clarification or execute_command depending on whether leads already exist in context
+Intent: school_enrichment
+Command if ready: .\run.ps1 lumen-scout enrich
+
+Example 4
+User: create follow-up drafts
+Outcome: execute_command only if school leads are already established
+Intent: followup_draft
+Command: .\run.ps1 lumen-scout followup
+
+Example 5
+User: make a call brief for this lead
+Outcome: needs_clarification
+Intent: call_brief
+Missing field: lead_id
+
+Example 6
+User: what can lumen-scout do
+Outcome: execute_command
+Intent: capabilities_lookup
+Command: .\run.ps1 lumen-scout capabilities
+
+
+V1 Safety Rule
+When the router is uncertain between a school-specific path and a generic path, prefer the command that is less presumptive. In practice, that means prefer discover-web unless the request clearly specifies private K-12 school discovery.
